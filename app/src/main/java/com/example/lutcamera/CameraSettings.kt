@@ -5,10 +5,31 @@ import androidx.camera.video.Quality
 /** 拍摄模式。 */
 enum class CameraMode { VIDEO, PHOTO }
 
+/** 录制帧率。 */
+enum class VideoFrameRate(val value: Int) {
+    FPS24(24),
+    FPS30(30),
+    FPS60(60),
+    FPS120(120)
+}
+
 /** 录制画质。 */
 enum class VideoQuality(val label: String, val quality: Quality) {
     FHD("1080p", Quality.FHD),
     UHD("4K", Quality.UHD)
+}
+
+/**
+ * 色彩空间标签。
+ *
+ * 与 Blackmagic Camera 的 Color Space Tag 对应，随文件一起写入媒体信息，
+ * 用于后期软件识别素材色彩空间，不改变传感器实际输出格式。
+ */
+enum class ColorSpaceTag(val label: String) {
+    REC709("Rec.709"),
+    REC2020("Rec.2020"),
+    P3D65("P3 D65"),
+    LOG("Log / HDR")
 }
 
 /**

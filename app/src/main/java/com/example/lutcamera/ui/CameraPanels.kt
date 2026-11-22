@@ -33,16 +33,19 @@ import com.example.lutcamera.CameraMode
 import com.example.lutcamera.CameraStops
 import com.example.lutcamera.CameraUiState
 import com.example.lutcamera.CameraViewModel
+import com.example.lutcamera.ColorSpaceTag
 import com.example.lutcamera.LutEntry
+import com.example.lutcamera.VideoFrameRate
 import com.example.lutcamera.VideoQuality
 import com.example.lutcamera.ui.theme.CamAccent
 import com.example.lutcamera.ui.theme.CamRecord
 import com.example.lutcamera.ui.theme.CamSurfaceHigh
 import com.example.lutcamera.ui.theme.CamTextSecondary
+import com.example.lutcamera.ui.theme.CamWarn
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-enum class CameraPanel { LUT, WB, ISO, SHUTTER, FOCUS, ZOOM, SETTINGS }
+enum class CameraPanel { LUT, WB, ISO, SHUTTER, FOCUS, ZOOM, SETTINGS, FRAME_RATE }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,6 +76,7 @@ fun CameraPanelSheet(
                 CameraPanel.FOCUS -> FocusPanel(state, viewModel)
                 CameraPanel.ZOOM -> ZoomPanel(state, viewModel)
                 CameraPanel.SETTINGS -> SettingsPanel(state, viewModel)
+                CameraPanel.FRAME_RATE -> FrameRatePanel(state, viewModel)
             }
         }
     }
@@ -89,20 +93,17 @@ private fun LutPanel(
     PanelHeader("LUT", "实时 3D 调色查找表")
 
     ToggleRow(
-        title = "启用 LUT",
+        title = "显示 LUT",
         checked = state.lutEnabled,
         onCheckedChange = { viewModel.toggleLut() }
     )
 
+    ValueLabel("强度", "${(state.lutIntensity * 100).roundToInt()}%")
     Slider(
         value = state.lutIntensity,
         onValueChange = viewModel::setIntensity,
-        valueRange = 0f..1f
-    )
-    Text(
-        text = "强度 ${(state.lutIntensity * 100).roundToInt()}%",
-        fontSize = 12.sp,
-        color = CamTextSecondary
+        valueRange = 0f..1f,
+        enabled = state.lutEnabled
     )
 
     HorizontalDivider(
@@ -110,7 +111,9 @@ private fun LutPanel(
         color = Color.White.copy(alpha = 0.08f)
     )
 
-    LazyColumn(modifier = Modifier.heightIn(max = 280.dp)) {
+    SectionLabel("LUT 选择")
+
+    LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
         items(state.entries, key = { it.id }) { entry ->
             LutRow(
                 entry = entry,
@@ -121,14 +124,72 @@ private fun LutPanel(
         }
     }
 
-    Button(
-        onClick = onImport,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 12.dp)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text("导入 .cube 文件")
+        Button(
+            onClick = onImport,
+            modifier = Modifier.weight(1f)
+        ) {
+            Text("导入 LUT")
+        }
+        Button(
+            onClick = { viewModel.selectLut("builtin:identity") },
+            modifier = Modifier.weight(1f)
+        ) {
+            Text("重置")
+        }
     }
+
+    HorizontalDivider(
+        modifier = Modifier.padding(vertical = 12.dp),
+        color = Color.White.copy(alpha = 0.08f)
+    )
+
+    SectionLabel("录制")
+
+    ToggleRow(
+        title = "将 LUT 录制到片段",
+        checked = state.recordLutToClip,
+        onCheckedChange = { viewModel.setRecordLutToClip(it) }
+    )
+    Text(
+        text = if (state.recordLutToClip) {
+            "成片已烧录 LUT，无法后期更换风格"
+        } else {
+            "LUT 仅用于监看，成片保留原始 Log 画面"
+        },
+        fontSize = 11.sp,
+        color = CamTextSecondary,
+        modifier = Modifier.padding(top = 2.dp, bottom = 6.dp)
+    )
+
+    ToggleRow(
+        title = "显示 LUT 状态提示",
+        checked = state.lutHintVisible,
+        onCheckedChange = { viewModel.setLutHintVisible(it) }
+    )
+
+    SectionLabel("色彩空间标签")
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        ColorSpaceTag.entries.forEach { tag ->
+            FilterChip(
+                selected = state.colorSpaceTag == tag,
+                onClick = { viewModel.setColorSpaceTag(tag) },
+                label = { Text(tag.label) }
+            )
+        }
+    }
+    Text(
+        text = "仅写入文件标签，不改变实际色彩编码",
+        fontSize = 11.sp,
+        color = CamTextSecondary,
+        modifier = Modifier.padding(top = 6.dp)
+    )
 }
 
 @Composable
@@ -341,6 +402,47 @@ private fun ZoomPanel(state: CameraUiState, viewModel: CameraViewModel) {
             viewModel.updateSettings { it.copy(zoom = value) }
         },
         valueRange = 1f..state.maxZoom.coerceAtLeast(1f)
+    )
+}
+
+// ── 帧率 ────────────────────────────────────────────────────────────
+
+@Composable
+private fun FrameRatePanel(state: CameraUiState, viewModel: CameraViewModel) {
+    PanelHeader("录像帧率", "${state.frameRate.value} fps")
+
+    SectionLabel("帧率选择")
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        VideoFrameRate.entries.forEach { rate ->
+            FilterChip(
+                selected = state.frameRate == rate,
+                onClick = { viewModel.setFrameRate(rate) },
+                label = { Text("${rate.value} fps") }
+            )
+        }
+    }
+
+    Text(
+        text = when (state.frameRate) {
+            VideoFrameRate.FPS24 -> "24 fps：电影感运动模糊，适合叙事创作。"
+            VideoFrameRate.FPS30 -> "30 fps：通用标准，兼容性最好。"
+            VideoFrameRate.FPS60 -> "60 fps：高帧率，动作更流畅，支持后期慢放。"
+            VideoFrameRate.FPS120 -> "120 fps：超高帧率，可后期 4 倍慢放；仅在部分机型支持。"
+        },
+        fontSize = 12.sp,
+        color = CamTextSecondary,
+        modifier = Modifier.padding(top = 12.dp)
+    )
+
+    Text(
+        text = "注意：高帧率（尤其 120fps）受机型限制，4K 下通常不支持，可能自动降帧。",
+        fontSize = 11.sp,
+        color = CamWarn,
+        modifier = Modifier.padding(top = 8.dp)
     )
 }
 

@@ -12,8 +12,13 @@ import android.os.StatFs
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -31,7 +36,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -60,7 +64,6 @@ import com.example.lutcamera.CameraMode
 import com.example.lutcamera.CameraViewModel
 import com.example.lutcamera.LutSurfaceProcessor
 import com.example.lutcamera.ui.theme.CamAccent
-import com.example.lutcamera.ui.theme.CamSurfaceHigh
 import com.example.lutcamera.ui.theme.CamTextSecondary
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
@@ -123,9 +126,21 @@ fun CameraScreen(
     }
 
     // 绑定 / 重新绑定
-    LaunchedEffect(state.lensFacing, state.quality, cameraGranted) {
+    LaunchedEffect(
+        state.lensFacing,
+        state.quality,
+        state.recordLutToClip,
+        state.frameRate,
+        cameraGranted
+    ) {
         if (cameraGranted) {
-            controller.bind(previewView, state.lensFacing, state.quality)
+            controller.bind(
+                previewView,
+                state.lensFacing,
+                state.quality,
+                state.recordLutToClip,
+                state.frameRate
+            )
         }
     }
 
@@ -216,15 +231,27 @@ fun CameraScreen(
                 GridOverlay(Modifier.fillMaxSize())
             }
 
+            // 左下角直方图（Blackmagic 布局）
             if (state.overlays.histogram) {
                 HistogramOverlay(
                     bins = viewModel.histogram,
                     modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .navigationBarsPadding()
+                        .padding(start = 12.dp, bottom = 108.dp)
+                        .size(112.dp, 60.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                )
+            }
+
+            // 右上角 3D LUT 状态提示：白色仅监看，红色已烧录到片段
+            if (state.lutHintVisible && state.lutEnabled && state.activeLut != null) {
+                LutStatusBadge(
+                    burned = state.recordLutToClip,
+                    modifier = Modifier
                         .align(Alignment.TopEnd)
                         .statusBarsPadding()
-                        .padding(top = 56.dp, end = 12.dp)
-                        .size(120.dp, 64.dp)
-                        .clip(RoundedCornerShape(4.dp))
+                        .padding(top = 52.dp, end = 12.dp)
                 )
             }
 
@@ -272,78 +299,143 @@ fun CameraScreen(
             }
         }
 
-        // 底部控制
+        // 底部控制区：胶片条 + 横向参数栏 + 录制按钮
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .navigationBarsPadding()
-                .padding(bottom = 16.dp),
+                .padding(bottom = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            // 悬浮滤镜窗与滤镜开启键同一行，展开时带过渡动画
             Row(
-                modifier = Modifier.padding(horizontal = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                ControlChip(
+                    label = "滤镜",
+                    value = if (state.lutStripVisible) "收起" else "展开",
+                    active = state.lutStripVisible,
+                    onClick = { viewModel.toggleLutStrip() },
+                    modifier = Modifier.width(58.dp)
+                )
+
+                AnimatedVisibility(
+                    visible = state.lutStripVisible,
+                    enter = fadeIn(tween(220)) + expandVertically(expandFrom = Alignment.CenterVertically),
+                    exit = fadeOut(tween(180)) + shrinkVertically(shrinkTowards = Alignment.CenterVertically),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    LutFilmstrip(
+                        entries = state.entries,
+                        selectedId = state.selectedLutId,
+                        onSelect = { viewModel.selectLut(it) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+
+            // 横向功能控制栏（按键填满整行）
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                LutToggleButton(
+                    enabled = state.lutEnabled,
+                    onClick = { viewModel.toggleLut() },
+                    modifier = Modifier.weight(1f)
+                )
                 ControlChip(
                     label = "LUT",
                     value = if (state.lutEnabled) state.lutName else "关闭",
                     active = state.lutEnabled,
-                    onClick = { panel = CameraPanel.LUT }
-                )
-
-                Spacer(Modifier.width(10.dp))
-
-                Slider(
-                    value = state.lutIntensity,
-                    onValueChange = viewModel::setIntensity,
-                    valueRange = 0f..1f,
-                    enabled = state.lutEnabled,
+                    onClick = { panel = CameraPanel.LUT },
                     modifier = Modifier.weight(1f)
-                )
-
-                Text(
-                    text = "${(state.lutIntensity * 100).roundToInt()}%",
-                    fontSize = 11.sp,
-                    color = CamTextSecondary,
-                    modifier = Modifier.width(36.dp)
-                )
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ControlChip(
-                    label = "WB",
-                    value = if (state.settings.manualWhiteBalance) "${state.settings.kelvin}K" else "自动",
-                    active = state.settings.manualWhiteBalance,
-                    onClick = { panel = CameraPanel.WB }
                 )
                 ControlChip(
                     label = "ISO",
                     value = if (state.settings.manualExposure) "${state.settings.iso}" else "自动",
                     active = state.settings.manualExposure,
-                    onClick = { panel = CameraPanel.ISO }
+                    onClick = { panel = CameraPanel.ISO },
+                    modifier = Modifier.weight(1f)
                 )
                 ControlChip(
                     label = "快门",
                     value = if (state.settings.manualExposure) state.settings.shutterLabel else "自动",
                     active = state.settings.manualExposure,
-                    onClick = { panel = CameraPanel.SHUTTER }
+                    onClick = { panel = CameraPanel.SHUTTER },
+                    modifier = Modifier.weight(1f)
+                )
+                ControlChip(
+                    label = "WB",
+                    value = if (state.settings.manualWhiteBalance) "${state.settings.kelvin}K" else "自动",
+                    active = state.settings.manualWhiteBalance,
+                    onClick = { panel = CameraPanel.WB },
+                    modifier = Modifier.weight(1f)
                 )
                 ControlChip(
                     label = "对焦",
                     value = if (state.settings.manualFocus) "手动" else "自动",
                     active = state.settings.manualFocus,
-                    onClick = { panel = CameraPanel.FOCUS }
+                    onClick = { panel = CameraPanel.FOCUS },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // 第二行：帧率、变焦、监看、设置（填满整行）
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                ControlChip(
+                    label = "帧率",
+                    value = "${state.frameRate.value}fps",
+                    active = true,
+                    onClick = { panel = CameraPanel.FRAME_RATE },
+                    modifier = Modifier.weight(1f)
                 )
                 ControlChip(
                     label = "变焦",
                     value = "%.1f×".format(state.settings.zoom),
                     active = state.settings.zoom > 1.01f,
-                    onClick = { panel = CameraPanel.ZOOM }
+                    onClick = { panel = CameraPanel.ZOOM },
+                    modifier = Modifier.weight(1f)
+                )
+                ControlChip(
+                    label = "监看",
+                    value = if (state.overlays.grid || state.overlays.zebra ||
+                        state.overlays.peaking || state.overlays.falseColor
+                    ) "开启" else "关闭",
+                    active = state.overlays.grid || state.overlays.zebra ||
+                            state.overlays.peaking || state.overlays.falseColor,
+                    onClick = { panel = CameraPanel.SETTINGS },
+                    modifier = Modifier.weight(1f)
+                )
+                ControlChip(
+                    label = "设置",
+                    value = state.quality.label,
+                    active = false,
+                    onClick = { panel = CameraPanel.SETTINGS },
+                    modifier = Modifier.weight(1f)
                 )
             }
 
+            // 录制控制行
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -363,7 +455,10 @@ fun CameraScreen(
                             } else {
                                 // 立即关闭监看叠加，避免写进前几帧
                                 processor.setOverlayFlags(0, state.overlays.zebraThreshold)
-                                controller.startRecording(state.audioEnabled)
+                                controller.startRecording(
+                                    state.audioEnabled,
+                                    state.colorSpaceTag
+                                )
                             }
                         }
                     )
@@ -375,12 +470,8 @@ fun CameraScreen(
                     }
                 }
 
-                ControlChip(
-                    label = "设置",
-                    value = "⚙",
-                    active = false,
-                    onClick = { panel = CameraPanel.SETTINGS }
-                )
+                // 右侧占位，保持录制按钮水平居中
+                Spacer(Modifier.width(52.dp))
             }
         }
     }
@@ -409,15 +500,15 @@ private fun ModeSwitch(mode: CameraMode, onModeChange: (CameraMode) -> Unit) {
 private fun ModeText(text: String, selected: Boolean, onClick: () -> Unit) {
     Text(
         text = text,
-        fontSize = 12.sp,
+        fontSize = 10.sp,
         color = if (selected) CamAccent else CamTextSecondary,
         fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(
                 if (selected) CamAccent.copy(alpha = 0.16f) else Color.Transparent
             )
-            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .padding(horizontal = 9.dp, vertical = 4.dp)
             .pointerInput(Unit) { detectTapGestures { onClick() } }
     )
 }

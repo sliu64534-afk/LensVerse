@@ -27,10 +27,20 @@ class LutLibrary(private val context: Context) {
 
     private val builtInFactories = linkedMapOf<String, () -> CubeLut>(
         "builtin:identity" to { CubeLut.identity() },
+        "builtin:rec709" to { CubeLut.rec709() },
         "builtin:mono" to { CubeLut.monochrome() },
         "builtin:warm" to { CubeLut.warm() },
         "builtin:cool" to { CubeLut.cool() },
-        "builtin:film" to { CubeLut.film() }
+        "builtin:film" to { CubeLut.film() },
+        "builtin:cinema_teal" to { CubeLut.cinemaTeal() },
+        "builtin:day_night" to { CubeLut.dayNight() },
+        "builtin:dusty" to { CubeLut.dusty() },
+        "builtin:nature" to { CubeLut.nature() },
+        "builtin:nostalgic" to { CubeLut.nostalgic() },
+        "builtin:paloma" to { CubeLut.paloma() },
+        "builtin:rift" to { CubeLut.rift() },
+        "builtin:vivid" to { CubeLut.vivid() },
+        "builtin:warm_fade" to { CubeLut.warmFade() }
     )
 
     private val builtInCache = HashMap<String, CubeLut>()

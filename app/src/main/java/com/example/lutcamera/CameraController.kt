@@ -81,6 +81,8 @@ class CameraController(
     private var boundPreview: PreviewView? = null
     private var boundFacing = CameraSelector.LENS_FACING_BACK
     private var boundQuality = VideoQuality.FHD
+    private var boundRecordLutToClip = true
+    private var boundFrameRate = VideoFrameRate.FPS30
     private var lastSettings = ManualSettings()
 
     /** 设备支持的自动模式，避免下发机型不支持的 AE/AWB/AF 模式。 */
@@ -105,13 +107,17 @@ class CameraController(
         previewView: PreviewView,
         facing: Int,
         quality: VideoQuality,
+        recordLutToClip: Boolean = true,
+        frameRate: VideoFrameRate = VideoFrameRate.FPS30,
         force: Boolean = false
     ) {
         if (!force &&
             provider != null &&
             boundPreview === previewView &&
             boundFacing == facing &&
-            boundQuality == quality
+            boundQuality == quality &&
+            boundRecordLutToClip == recordLutToClip &&
+            boundFrameRate == frameRate
         ) {
             return
         }
@@ -119,6 +125,8 @@ class CameraController(
         boundPreview = previewView
         boundFacing = facing
         boundQuality = quality
+        boundRecordLutToClip = recordLutToClip
+        boundFrameRate = frameRate
 
         val generation = ++bindGeneration
         val future = ProcessCameraProvider.getInstance(context)
@@ -132,7 +140,7 @@ class CameraController(
             }
 
             provider = cameraProvider
-            bindUseCases(cameraProvider, previewView, facing, quality)
+            bindUseCases(cameraProvider, previewView, facing, quality, recordLutToClip)
         }, mainExecutor)
     }
 
@@ -140,7 +148,8 @@ class CameraController(
         cameraProvider: ProcessCameraProvider,
         previewView: PreviewView,
         facing: Int,
-        quality: VideoQuality
+        quality: VideoQuality,
+        recordLutToClip: Boolean
     ) {
         val selector = runCatching {
             CameraSelector.Builder().requireLensFacing(facing).build()
@@ -154,22 +163,31 @@ class CameraController(
         val plans = ArrayList<BindPlan>(5)
 
         if (!effectDisabled) {
+            // 烧录开启：LUT 作用于预览 / 拍照 / 录像三路输出。
+            // 烧录关闭：只给预览挂效果，拍照和录像直出原始画面。
+            val monitorTargets = CameraEffect.PREVIEW
+            val recordTargets = monitorTargets or
+                    CameraEffect.IMAGE_CAPTURE or
+                    CameraEffect.VIDEO_CAPTURE
+
             plans += BindPlan(
                 withPhoto = true,
                 withVideo = true,
-                effectTargets = CameraEffect.PREVIEW or
-                        CameraEffect.IMAGE_CAPTURE or
-                        CameraEffect.VIDEO_CAPTURE
+                effectTargets = if (recordLutToClip) recordTargets else monitorTargets
             )
             plans += BindPlan(
                 withPhoto = true,
                 withVideo = false,
-                effectTargets = CameraEffect.PREVIEW or CameraEffect.IMAGE_CAPTURE
+                effectTargets = if (recordLutToClip) {
+                    monitorTargets or CameraEffect.IMAGE_CAPTURE
+                } else {
+                    monitorTargets
+                }
             )
             plans += BindPlan(
                 withPhoto = false,
                 withVideo = false,
-                effectTargets = CameraEffect.PREVIEW
+                effectTargets = monitorTargets
             )
         }
 
@@ -266,7 +284,7 @@ class CameraController(
 
         mainExecutor.execute {
             val view = boundPreview ?: return@execute
-            bind(view, boundFacing, boundQuality, force = true)
+            bind(view, boundFacing, boundQuality, boundRecordLutToClip, boundFrameRate, force = true)
             onError?.invoke("LUT 渲染不可用，已切换为直通预览")
         }
     }
@@ -287,7 +305,7 @@ class CameraController(
 
             effectDisabled = true
             val view = boundPreview ?: return@postDelayed
-            bind(view, boundFacing, boundQuality, force = true)
+            bind(view, boundFacing, boundQuality, boundRecordLutToClip, boundFrameRate, force = true)
             onError?.invoke("LUT 未出帧，已切换为直通预览")
         }, FRAME_WATCHDOG_MS)
     }
@@ -461,6 +479,14 @@ class CameraController(
             }
         }
 
+        // 目标帧率范围：固定为所选帧率，避免自动降帧导致录像帧率不稳。
+        val fps = boundFrameRate.value
+        builder.setCaptureRequestOption(
+            CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+            android.util.Range(fps, fps)
+        )
+        hasOption = true
+
         if (!hasOption) return
 
         runCatching { control.setCaptureRequestOptions(builder.build()) }
@@ -560,7 +586,7 @@ class CameraController(
 
     // ── 录像 ────────────────────────────────────────────────────────
 
-    fun startRecording(withAudio: Boolean) {
+    fun startRecording(withAudio: Boolean, colorSpaceTag: ColorSpaceTag = ColorSpaceTag.REC709) {
         if (recording != null) return
 
         val video = videoCapture ?: run {
@@ -571,6 +597,7 @@ class CameraController(
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, fileStamp("mp4"))
             put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+            put(MediaStore.Video.Media.DESCRIPTION, colorSpaceTag.label)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 put(
                     MediaStore.MediaColumns.RELATIVE_PATH,

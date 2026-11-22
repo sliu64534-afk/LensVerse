@@ -35,6 +35,8 @@ object LutShader {
         #extension GL_OES_EGL_image_external_essl3 : require
 
         precision highp float;
+        precision highp sampler3D;
+        precision highp samplerExternalOES;
 
         uniform samplerExternalOES uCameraTexture;
         uniform sampler3D uLutTexture;

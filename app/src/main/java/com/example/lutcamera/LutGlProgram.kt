@@ -189,7 +189,9 @@ class LutGlProgram {
             "创建着色器失败"
         }
 
-        GLES30.glShaderSource(shader, source)
+        // GLSL 要求 #version 必须是源码第一行（前面只能有空白）。
+        // 原始字符串字面量以换行开头，trimIndent 去掉首行换行和缩进。
+        GLES30.glShaderSource(shader, source.trimIndent())
         GLES30.glCompileShader(shader)
 
         val status = IntArray(1)

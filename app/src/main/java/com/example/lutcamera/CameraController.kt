@@ -89,6 +89,7 @@ class CameraController(
     private var aeAutoMode: Int? = CaptureRequest.CONTROL_AE_MODE_ON
     private var awbAutoMode: Int? = CaptureRequest.CONTROL_AWB_MODE_AUTO
     private var afAutoMode: Int? = CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+    private var supportedFpsRanges: List<android.util.Range<Int>> = emptyList()
 
     /** LUT 效果管线一旦失败就永久停用，避免反复重绑导致黑屏循环。 */
     private var effectDisabled = false
@@ -120,6 +121,12 @@ class CameraController(
             boundFrameRate == frameRate
         ) {
             return
+        }
+
+        // 用户主动改变设置时，给 LUT 管线一次新的机会。
+        // 内部回退（force=true）不重置，避免黑屏循环。
+        if (!force) {
+            effectDisabled = false
         }
 
         boundPreview = previewView
@@ -384,10 +391,39 @@ class CameraController(
             CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO,
             CaptureRequest.CONTROL_AF_MODE_AUTO
         )
+
+        // 读取设备支持的帧率范围，设置目标帧率时只能从中选择。
+        supportedFpsRanges = runCatching {
+            @Suppress("UNCHECKED_CAST")
+            info.getCameraCharacteristic(
+                CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES
+            ) as? Array<android.util.Range<Int>>
+        }.getOrNull()?.toList() ?: emptyList()
     }
 
     private fun pickMode(available: IntArray?, vararg preferred: Int): Int? =
         preferred.firstOrNull { candidate -> available?.contains(candidate) == true }
+
+    /**
+     * 从设备支持的帧率范围里挑选最接近目标值的一项。
+     *
+     * 优先选择固定范围 [fps, fps]；没有则选上界等于目标帧率的范围；
+     * 再退而求其次选包含目标帧率、且上界最小的范围。
+     * 没有任何支持范围时返回 null（不下发该参数，相机使用默认帧率）。
+     */
+    private fun pickSupportedFpsRange(target: Int): android.util.Range<Int>? {
+        if (supportedFpsRanges.isEmpty()) return null
+
+        supportedFpsRanges.firstOrNull { it.lower == target && it.upper == target }
+            ?.let { return it }
+
+        supportedFpsRanges.firstOrNull { it.upper == target }
+            ?.let { return it }
+
+        return supportedFpsRanges
+            .filter { it.lower <= target && it.upper >= target }
+            .minByOrNull { it.upper - it.lower }
+    }
 
     fun release() {
         bindGeneration++
@@ -479,13 +515,15 @@ class CameraController(
             }
         }
 
-        // 目标帧率范围：固定为所选帧率，避免自动降帧导致录像帧率不稳。
-        val fps = boundFrameRate.value
-        builder.setCaptureRequestOption(
-            CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-            android.util.Range(fps, fps)
-        )
-        hasOption = true
+        // 目标帧率：只能下发设备支持的范围，否则相机可能停帧，
+        // 触发 watchdog 误判为「效果管线未出帧」并回退直通预览。
+        pickSupportedFpsRange(boundFrameRate.value)?.let { range ->
+            builder.setCaptureRequestOption(
+                CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                range
+            )
+            hasOption = true
+        }
 
         if (!hasOption) return
 
